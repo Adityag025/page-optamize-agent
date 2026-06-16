@@ -63,7 +63,7 @@ class Agent:
     def __init__(
         self,
         model: str | None = None,
-        max_tokens: int = 2000,
+        max_tokens: int = 1200,
     ):
         api_key = os.getenv("OPENROUTER_API_KEY")
         if not api_key:
