@@ -1,0 +1,27 @@
+# secrets
+.env
+
+# python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# playwright browsers
+/ms-playwright/
+
+# editor
+.vscode/
+.idea/
+
+# os
+.DS_Store
+Thumbs.db
+
+# temp
+/tmp/
+*.log
