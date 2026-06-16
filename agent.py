@@ -105,12 +105,14 @@ class Agent:
             pass
         return chunk  # last yielded value is the final reply
 
-    def stream_chat(self, user_message: str):
+    def stream_chat(self, user_message: str, initial_history: list | None = None):
         """
         Generator that yields incremental status strings as tools run,
         then yields the final reply as the last value.
-        Useful for streaming UIs (e.g. Gradio).
+        Pass initial_history to restore a previous conversation (for stateless/serverless use).
         """
+        if initial_history is not None:
+            self.history = initial_history
         self.history.append({"role": "user", "content": user_message})
         accumulated = ""
 

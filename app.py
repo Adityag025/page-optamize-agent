@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from agent import Agent
+from agent import Agent, SYSTEM_PROMPT
 
 MODELS = [
     "anthropic/claude-sonnet-4-5",
@@ -16,14 +16,13 @@ MODELS = [
     "meta-llama/llama-3.3-70b-instruct",
 ]
 
-_agents: dict[str, Agent] = {}
-
-
-def get_agent(model: str) -> Agent:
-    if model not in _agents:
-        _agents[model] = Agent(model=model)
-    return _agents[model]
-
+EXAMPLES = [
+    "Check the page speed of https://example.com",
+    "Run Python to list all prime numbers up to 100",
+    "Fetch the HTML title of https://example.com",
+    "What files are in the current directory?",
+    "Calculate compound interest: ₹10,000 at 8% for 5 years",
+]
 
 CAPABILITIES_MD = """
 | Tool | What it does |
@@ -35,21 +34,9 @@ CAPABILITIES_MD = """
 | PageSpeed | Google PageSpeed Insights + Lighthouse audit |
 """
 
-EXAMPLES = [
-    ["Check the page speed of https://example.com"],
-    ["Run Python to list all prime numbers up to 100"],
-    ["Fetch the HTML title of https://example.com"],
-    ["What files are in the current directory?"],
-    ["Calculate compound interest: ₹10,000 at 8% for 5 years"],
-    ["Write a Python script to count words in a text file"],
-]
-
 CSS = """
-/* ── layout ─────────────────────────────────────── */
 body, .gradio-container { background: #0f1117 !important; }
 .contain { max-width: 900px; margin: 0 auto; padding: 0 12px; }
-
-/* ── header ──────────────────────────────────────── */
 .header-box {
   background: linear-gradient(135deg, #1a1f2e 0%, #16213e 100%);
   border: 1px solid #2d3561;
@@ -59,42 +46,33 @@ body, .gradio-container { background: #0f1117 !important; }
 }
 .header-box h1 { color: #e2e8f0; font-size: 1.6rem; margin: 0 0 4px; }
 .header-box p  { color: #94a3b8; font-size: 0.92rem; margin: 0; }
-
-/* ── controls row ────────────────────────────────── */
-.controls-row { display: flex; gap: 10px; align-items: flex-end; margin-bottom: 10px; }
-
-/* ── chatbot ─────────────────────────────────────── */
-#chatbot { border-radius: 12px !important; }
-#chatbot .message.bot { background: #1e2435 !important; }
-#chatbot .message.user { background: #2d3561 !important; }
-
-/* ── input row ───────────────────────────────────── */
-.input-row { display: flex; gap: 8px; align-items: flex-end; margin-top: 8px; }
-#send-btn { min-width: 90px; height: 44px; border-radius: 10px !important; }
-#msg-box textarea { border-radius: 10px !important; }
-
-/* ── capabilities accordion ──────────────────────── */
-.cap-accordion { margin-top: 12px; }
-.cap-accordion > div { background: #1a1f2e !important; border-color: #2d3561 !important; border-radius: 10px !important; }
-
-/* ── examples ────────────────────────────────────── */
-.examples-section { margin-top: 8px; }
-.examples-section .example {
+.example-chip button {
   background: #1a1f2e !important;
   border: 1px solid #2d3561 !important;
-  border-radius: 8px !important;
+  border-radius: 20px !important;
   color: #94a3b8 !important;
-  font-size: 0.85rem !important;
+  font-size: 0.82rem !important;
+  padding: 4px 12px !important;
+  cursor: pointer !important;
 }
-
-/* ── footer ──────────────────────────────────────── */
+.example-chip button:hover { border-color: #5b6bbf !important; color: #c7d2fe !important; }
 footer { display: none !important; }
 """
 
+
+def make_fresh_agent(model: str) -> Agent:
+    return Agent(model=model)
+
+
 with gr.Blocks(title="AI Automation Agent", fill_height=False) as demo:
+    # ── per-session agent history stored in browser state ──────────────
+    # Stores the agent's full internal history (incl. tool results).
+    # This survives across serverless invocations.
+    agent_hist = gr.State(value=None)
+
     with gr.Column(elem_classes="contain"):
 
-        # ── Header ──────────────────────────────────────
+        # Header
         gr.HTML("""
         <div class="header-box">
           <h1>⚡ AI Automation Agent</h1>
@@ -102,8 +80,8 @@ with gr.Blocks(title="AI Automation Agent", fill_height=False) as demo:
         </div>
         """)
 
-        # ── Model selector + New Chat ────────────────────
-        with gr.Row(elem_classes="controls-row"):
+        # Controls
+        with gr.Row():
             model_dd = gr.Dropdown(
                 choices=MODELS,
                 value=os.getenv("OPENROUTER_MODEL", MODELS[0]),
@@ -113,7 +91,7 @@ with gr.Blocks(title="AI Automation Agent", fill_height=False) as demo:
             )
             reset_btn = gr.Button("🔄 New Chat", variant="secondary", scale=1, min_width=110)
 
-        # ── Chatbot ──────────────────────────────────────
+        # Chatbot
         chatbot = gr.Chatbot(
             elem_id="chatbot",
             show_label=False,
@@ -126,10 +104,9 @@ with gr.Blocks(title="AI Automation Agent", fill_height=False) as demo:
             ),
         )
 
-        # ── Input row ────────────────────────────────────
-        with gr.Row(elem_classes="input-row"):
+        # Input
+        with gr.Row():
             msg_box = gr.Textbox(
-                elem_id="msg-box",
                 placeholder="Describe your task… (Enter to send)",
                 show_label=False,
                 scale=5,
@@ -137,51 +114,64 @@ with gr.Blocks(title="AI Automation Agent", fill_height=False) as demo:
                 lines=1,
                 max_lines=4,
             )
-            send_btn = gr.Button("Send ➤", elem_id="send-btn", variant="primary", scale=1)
+            send_btn = gr.Button("Send ➤", variant="primary", scale=1, min_width=90)
 
-        # ── Capabilities accordion ───────────────────────
-        with gr.Accordion("Available tools", open=False, elem_classes="cap-accordion"):
+        # Example chips (plain buttons — no CSVLogger, works on serverless)
+        gr.Markdown("**Try an example:**", visible=True)
+        with gr.Row():
+            example_btns = [
+                gr.Button(ex, elem_classes="example-chip", size="sm", variant="secondary")
+                for ex in EXAMPLES
+            ]
+
+        # Capabilities accordion
+        with gr.Accordion("Available tools", open=False):
             gr.Markdown(CAPABILITIES_MD)
 
-        # ── Examples ─────────────────────────────────────
-        gr.Examples(
-            examples=EXAMPLES,
-            inputs=msg_box,
-            label="Try an example",
-            elem_id="examples-section",
-        )
+    # ── Logic ─────────────────────────────────────────────────────────────
 
-    # ── Logic ────────────────────────────────────────────
-
-    def user_submit(message, history):
+    def user_submit(message, chatbot_state):
         if not message.strip():
-            return history, ""
-        return history + [{"role": "user", "content": message}], ""
+            return chatbot_state, ""
+        return chatbot_state + [{"role": "user", "content": message}], ""
 
-    def bot_reply(history, model):
-        user_msg = history[-1]["content"]
-        history = history + [{"role": "assistant", "content": ""}]
-        agent = get_agent(model)
-        for partial in agent.stream_chat(user_msg):
-            history[-1]["content"] = partial
-            yield history
+    def bot_reply(chatbot_state, saved_hist, model):
+        user_msg = chatbot_state[-1]["content"]
+        chatbot_state = chatbot_state + [{"role": "assistant", "content": ""}]
 
-    def reset_conversation(model):
-        if model in _agents:
-            _agents[model].reset()
-        return [], ""
+        # Fresh agent each call; restore previous conversation via initial_history
+        agent = make_fresh_agent(model)
+        prev_history = saved_hist  # may be None (fresh) or list (restored)
 
+        for partial in agent.stream_chat(user_msg, initial_history=prev_history):
+            chatbot_state[-1]["content"] = partial
+            yield chatbot_state, saved_hist  # don't update state mid-stream
+
+        # After streaming: persist full internal history (includes tool calls)
+        yield chatbot_state, agent.history
+
+    def reset_conversation():
+        return [], None, ""
+
+    def fill_example(example_text):
+        return example_text
+
+    # Wire send actions
     msg_box.submit(
         user_submit, [msg_box, chatbot], [chatbot, msg_box], queue=False
-    ).then(bot_reply, [chatbot, model_dd], chatbot)
+    ).then(bot_reply, [chatbot, agent_hist, model_dd], [chatbot, agent_hist])
 
     send_btn.click(
         user_submit, [msg_box, chatbot], [chatbot, msg_box], queue=False
-    ).then(bot_reply, [chatbot, model_dd], chatbot)
+    ).then(bot_reply, [chatbot, agent_hist, model_dd], [chatbot, agent_hist])
 
     reset_btn.click(
-        reset_conversation, inputs=model_dd, outputs=[chatbot, msg_box], queue=False
+        reset_conversation, outputs=[chatbot, agent_hist, msg_box], queue=False
     )
+
+    # Wire example chips to fill the textbox
+    for btn in example_btns:
+        btn.click(fill_example, inputs=btn, outputs=msg_box, queue=False)
 
 
 if __name__ == "__main__":
@@ -189,7 +179,7 @@ if __name__ == "__main__":
     demo.launch(
         server_name="0.0.0.0",
         server_port=7860,
-        share=False,        # set True for a public gradio.live URL
+        share=False,
         show_error=True,
         css=CSS,
     )
